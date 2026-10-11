@@ -45,20 +45,6 @@ CREATE TABLE IF NOT EXISTS movie_scores (
 );
 """
 
-# Columns added to movie_scores after it was first created, for upgrading older history files.
-_ADDED_COLUMNS = {"gross_so_far": "REAL", "days_in_theaters": "INTEGER", "days_until_release": "INTEGER"}
-
-
-def _upgrade(conn: sqlite3.Connection) -> None:
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(movie_scores)")}
-    for column, sql_type in _ADDED_COLUMNS.items():
-        if column not in existing:
-            conn.execute(f"ALTER TABLE movie_scores ADD COLUMN {column} {sql_type}")
-    # Older runs labelled every movie with a result 'Released'.
-    conn.execute("UPDATE movie_scores SET status = 'Final' WHERE status = 'Released'")
-    conn.commit()
-
-
 def open_history(path: Path = HISTORY_DB) -> sqlite3.Connection:
     """Returns an in-memory copy of the history file (or an empty history if there's no file)."""
     conn = sqlite3.connect(":memory:")
@@ -69,7 +55,6 @@ def open_history(path: Path = HISTORY_DB) -> sqlite3.Connection:
         finally:
             disk.close()
     conn.executescript(SCHEMA)
-    _upgrade(conn)
     return conn
 
 

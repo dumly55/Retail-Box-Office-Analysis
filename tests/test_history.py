@@ -117,20 +117,3 @@ class TestRunWithHistory:
         actuals.write_text("Movie,Worldwide Actual\nMercy,$50\n", encoding="utf-8")
         run(str(predictions), str(actuals), date(2026, 10, 5), history_path=tmp_path / "history.sqlite")
         assert not (tmp_path / "history.sqlite").exists()
-
-
-
-def test_older_history_files_are_upgraded(tmp_path):
-    path = tmp_path / "history.sqlite"
-    with closing(sqlite3.connect(path)) as old:
-        old.execute(
-            "CREATE TABLE movie_scores (run_date TEXT, movie TEXT, release_date TEXT, forecaster TEXT, forecast REAL, "
-            "actual REAL, status TEXT, pct_error REAL, accuracy_band TEXT, PRIMARY KEY (run_date, movie, forecaster))"
-        )
-        old.execute("INSERT INTO movie_scores VALUES ('2026-10-01', 'Mercy', NULL, 'Predictions', 40, 50, 'Released', -20, 'Close')")
-        old.commit()
-
-    with closing(open_history(path)) as conn:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(movie_scores)")}
-        assert {"gross_so_far", "days_in_theaters", "days_until_release"} <= columns
-        assert conn.execute("SELECT status FROM movie_scores").fetchall() == [("Final",)]
