@@ -135,7 +135,7 @@ class TestStandardize:
                 ["2024-01-16", "Pen", "$2.50"],
                 [None, "Grand Total", "$12.50"],
             ],
-            columns=["Acme Co. Weekly Sales", "Unnamed: 1", "Unnamed: 2"],
+            columns=["Acme Co. Sales Export", "Unnamed: 1", "Unnamed: 2"],
         )
         out, mapping = standardize(sheet)
 
