@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pandas as pd
 
-SQL_DIR = Path(__file__).resolve().parent.parent / "sql"
+from .common import PROJECT_ROOT
+
+SQL_DIR = PROJECT_ROOT / "sql"
 
 # Long title lists are left out of report tables (the scorecard names the movies); explore them in the database.
 HIDDEN_IN_REPORTS = {"titles"}

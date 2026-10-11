@@ -19,8 +19,10 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
+from .common import PROJECT_ROOT
+
 DATASET_URL = "https://archive.ics.uci.edu/static/public/352/online+retail.zip"
-RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
+RAW_DIR = PROJECT_ROOT / "data" / "raw"
 RAW_FILE = RAW_DIR / "Online Retail.xlsx"
 # The parsed rows, cached after the first read: the 23 MB Excel file takes ~20 seconds to read, the cache under one.
 RAW_CACHE = RAW_FILE.with_suffix(".pkl")

@@ -15,9 +15,10 @@ from pathlib import Path
 
 import pandas as pd
 
+from .common import PROJECT_ROOT
 from .predictions import title_key
 
-HISTORY_DB = Path(__file__).resolve().parent.parent / "data" / "prediction_history.sqlite"
+HISTORY_DB = PROJECT_ROOT / "data" / "prediction_history.sqlite"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS actual_results (
