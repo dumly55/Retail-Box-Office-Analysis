@@ -123,6 +123,25 @@ class TestLoadActuals:
         actuals = load_actuals("https://example.com/results.csv")
         assert list(actuals["actual"].fillna(-1)) == [10.0, 20.0, -1]
 
+    def test_tracker_projections_are_kept_from_any_download_too(self, monkeypatch):
+        def sheet(projections):
+            return pd.DataFrame(
+                [[t, "$5", p] for t, p in projections], columns=["Movie", "Worldwide Actual", "Worldwide Proj."]
+            )
+
+        downloads = iter(
+            [
+                sheet([("Mercy", "$30"), ("Send Help", None)]),
+                sheet([("Mercy", None), ("Send Help", None)]),
+                sheet([("Mercy", None), ("Send Help", "$40")]),
+            ]
+        )
+        monkeypatch.setattr("src.predictions.load_source", lambda source: next(downloads))
+        monkeypatch.setattr("src.predictions.time.sleep", lambda seconds: None)
+
+        actuals = load_actuals("https://example.com/results.csv")
+        assert list(actuals["projection"]) == [30.0, 40.0]
+
     def test_local_file_is_read_once(self, monkeypatch):
         calls = []
         monkeypatch.setattr(

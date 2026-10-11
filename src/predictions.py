@@ -179,18 +179,19 @@ SECONDS_BETWEEN_DOWNLOADS = 2.0
 
 
 def load_actuals(source: str) -> pd.DataFrame:
-    """Reads the actual-results sheet. A linked sheet is downloaded several times and any actual
-    value seen in any download is kept: sheets that pull results live from a website can return
-    some of those cells blank on one download and filled on the next."""
+    """Reads the actual-results sheet. A linked sheet is downloaded several times and any actual or
+    tracker projection seen in any download is kept: sheets that pull numbers live from a website
+    can return some of those cells blank on one download and filled on the next."""
     actuals = read_actuals(load_source(source))
     if not source.lower().startswith(("http://", "https://")):
         return actuals
 
     for _ in range(ACTUALS_DOWNLOADS - 1):
         time.sleep(SECONDS_BETWEEN_DOWNLOADS)
-        retry = read_actuals(load_source(source)).drop_duplicates("title").set_index("title")["actual"]
-        blank = actuals["actual"].isna()
-        actuals.loc[blank, "actual"] = actuals.loc[blank, "title"].map(retry)
+        retry = read_actuals(load_source(source)).drop_duplicates("title").set_index("title")
+        for column in ("actual", "projection"):
+            blank = actuals[column].isna()
+            actuals.loc[blank, column] = actuals.loc[blank, "title"].map(retry[column])
     return actuals
 
 
