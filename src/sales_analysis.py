@@ -1,7 +1,7 @@
-"""CLI entrypoint: cleans a sales dataset and builds the sales analysis workbook.
+"""Sales analysis: cleans a sales dataset and builds the analysis workbook. Also the command-line entry point.
 
 Usage:
-    python -m src.main
+    python -m src.sales_analysis
 """
 
 import argparse
@@ -9,26 +9,23 @@ import logging
 import sys
 from pathlib import Path
 
-import requests
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from .clean import QualityLog, clean_transactions, load_raw
+from .clean import QualityLog, clean_transactions
+from .common import OUTPUT_DIR, describe_error, next_free_path, setup_logging
 from .download_data import (
     StatusCallback,
-    ensure_raw_data,
     fetch_remote_dataset,
+    load_demo_dataset,
     load_local_dataset,
 )
-from .excel_report import build_workbook
-from .findings import build_findings
 from .normalize import detect_currency, parse_column_map, standardize
-from .report import SalesReportData, build_report_data
+from .sales_excel import build_workbook
+from .sales_findings import build_findings
+from .sales_kpis import SalesReportData, build_report_data
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-OUTPUT_DIR = PROJECT_ROOT / "output"
-LOGS_DIR = PROJECT_ROOT / "logs"
 DEMO_CURRENCY = "£"
 DEFAULT_CURRENCY = "$"
 
@@ -77,53 +74,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def setup_logging(log_name: str) -> None:
-    """Logs the full run detail to logs/<log_name>.log. Console output is handled separately via
-    rich (progress bar, summary table, friendly errors), so no console handler here.
-
-    Reconfigures the root logger's handlers on every call (rather than relying on
-    `logging.basicConfig`'s "first call wins" behavior), so a long-lived process
-    that runs more than once -- the GUI -- gets a fresh log file per run.
-    """
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOGS_DIR / f"{log_name}.log"
-
-    root_logger = logging.getLogger()
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-        handler.close()
-
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-    root_logger.addHandler(file_handler)
-    root_logger.setLevel(logging.INFO)
-
-
-def describe_error(exc: Exception) -> str:
-    """Translates an exception into a plain-language message, shared by the CLI
-    and the GUI so a network failure, bad data, etc. reads the same either way.
-    """
-    if isinstance(exc, requests.exceptions.RequestException):
-        return "Couldn't download the source data. Check your internet connection and try again."
-    if isinstance(exc, ValueError):
-        return f"Invalid input data: {exc}"
-    if isinstance(exc, OSError):
-        return f"Couldn't read or write a required file: {exc}"
-    return "Something went wrong. Check the log file for details."
-
-
-def next_free_path(path: Path) -> Path:
-    """Returns `path`, or "name (2).ext", "name (3).ext", ... if it already exists."""
-    if not path.exists():
-        return path
-    n = 2
-    while True:
-        candidate = path.with_name(f"{path.stem} ({n}){path.suffix}")
-        if not candidate.exists():
-            return candidate
-        n += 1
-
-
 def run_pipeline(
     data_url: str | None = None,
     data_file: str | Path | None = None,
@@ -151,10 +101,7 @@ def run_pipeline(
             raw_df = fetch_remote_dataset(data_url, status_callback=status_callback)
         detected_currency = detect_currency(raw_df) or DEFAULT_CURRENCY
     else:
-        notify("Checking for the cached demo dataset...")
-        raw_path = ensure_raw_data(status_callback=status_callback)
-        notify("Loading dataset...")
-        raw_df = load_raw(raw_path)
+        raw_df = load_demo_dataset(status_callback=status_callback)
         detected_currency = DEMO_CURRENCY
     if currency is None:
         currency = detected_currency

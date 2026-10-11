@@ -1,4 +1,4 @@
-from src.main import next_free_path
+from src.common import next_free_path
 
 
 class TestNextFreePath:

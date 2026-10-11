@@ -90,8 +90,8 @@ python -m venv .venv
 .venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m src.main                                                          # retail analysis (downloads the dataset the first time)
-python -m src.main --data-file my_sales.xlsx                                # or run it on your own sales file
+python -m src.sales_analysis                                                # retail analysis (downloads the dataset the first time)
+python -m src.sales_analysis --data-file my_sales.xlsx                      # or run it on your own sales file
 python -m src.prediction_report --predictions "<link>" --actuals "<link>"   # box office report
 ```
 

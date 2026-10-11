@@ -16,12 +16,13 @@ from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from .common import describe_error, setup_logging
 from .download_data import StatusCallback
-from .main import describe_error, run_pipeline, setup_logging
 from .prediction_findings import scorecard
 from .prediction_report import PredictionRun
 from .prediction_report import run as run_predictions
 from .predictions import IN_THEATERS, parse_title_map
+from .sales_analysis import run_pipeline
 
 WINDOW_TITLE = "Report Generator"
 SPREADSHEET_TYPES = [("Spreadsheets", "*.csv *.xlsx *.xls"), ("All files", "*.*")]

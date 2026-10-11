@@ -1,7 +1,6 @@
 """Cleaning and validation for sales rows, after `normalize.standardize` has mapped their columns."""
 
 import logging
-from pathlib import Path
 from typing import NamedTuple
 
 import pandas as pd
@@ -11,7 +10,7 @@ from .normalize import to_datetime, to_number
 logger = logging.getLogger(__name__)
 
 # Whole descriptions (lowercased) of lines that aren't products, like postage and fees. These would
-# otherwise show up as top sellers: "DOTCOM POSTAGE" is the demo dataset's #1 line in some weeks.
+# otherwise show up as top sellers: "DOTCOM POSTAGE" out-earns every real product in the demo dataset.
 NON_PRODUCT_DESCRIPTIONS = {
     "postage", "dotcom postage", "carriage", "shipping", "bank charges", "amazon fee",
     "manual", "discount", "samples", "adjust bad debt", "cruk commission",
@@ -27,10 +26,6 @@ class QualityLog(NamedTuple):
     non_product_dropped: int
     non_positive_price_dropped: int
     rows_out: int
-
-
-def load_raw(path: Path) -> pd.DataFrame:
-    return pd.read_excel(path, sheet_name=0)
 
 
 def clean_transactions(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, QualityLog]:

@@ -18,7 +18,7 @@ from .excel_style import (
     write_header_row,
     write_title,
 )
-from .report import SalesReportData
+from .sales_kpis import SalesReportData
 
 COUNT_FORMAT = "#,##0"
 

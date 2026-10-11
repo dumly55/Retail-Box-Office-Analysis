@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from src.report import build_report_data, monthly_revenue, revenue_by_country, top_products
+from src.sales_kpis import build_report_data, monthly_revenue, revenue_by_country, top_products
 
 
 def _sales_row(invoice_no, stock_code, description, quantity, invoice_date, unit_price, customer_id, country):

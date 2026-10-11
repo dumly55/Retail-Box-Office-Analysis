@@ -3,7 +3,7 @@ produces the same text. Each rule returns a sentence only when it has something 
 
 import pandas as pd
 
-from .report import SalesReportData
+from .sales_kpis import SalesReportData
 
 HIGH_CANCELLATION_SHARE = 0.10  # cancellations worth at least this share of revenue get called out
 

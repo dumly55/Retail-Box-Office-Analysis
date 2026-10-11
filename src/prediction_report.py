@@ -26,7 +26,7 @@ from .history import (
     save_scores,
     write_history,
 )
-from .main import OUTPUT_DIR, describe_error, next_free_path, setup_logging
+from .common import OUTPUT_DIR, describe_error, next_free_path, setup_logging
 from .prediction_excel import build_prediction_workbook
 from .prediction_findings import (
     FORECASTS,

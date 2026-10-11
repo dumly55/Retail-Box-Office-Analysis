@@ -22,6 +22,8 @@ from rich.progress import (
 DATASET_URL = "https://archive.ics.uci.edu/static/public/352/online+retail.zip"
 RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 RAW_FILE = RAW_DIR / "Online Retail.xlsx"
+# The parsed rows, cached after the first read: the 23 MB Excel file takes ~20 seconds to read, the cache under one.
+RAW_CACHE = RAW_FILE.with_suffix(".pkl")
 
 logger = logging.getLogger(__name__)
 
@@ -68,11 +70,24 @@ def _download_with_status_messages(url: str, status_callback: StatusCallback) ->
     return _stream_download(url, report)
 
 
-def ensure_raw_data(status_callback: StatusCallback | None = None) -> Path:
-    """Returns the path to the cached built-in demo dataset, downloading it if needed."""
+def load_demo_dataset(status_callback: StatusCallback | None = None) -> pd.DataFrame:
+    """Returns the built-in demo dataset's rows, downloading the file the first time."""
+    notify = status_callback or (lambda _msg: None)
+    if RAW_FILE.exists() and RAW_CACHE.exists() and RAW_CACHE.stat().st_mtime >= RAW_FILE.stat().st_mtime:
+        logger.info("Reading the demo dataset from its cache at %s", RAW_CACHE)
+        return pd.read_pickle(RAW_CACHE)
+
+    _ensure_raw_file(status_callback)
+    notify("Reading the demo dataset (only slow the first time)...")
+    df = pd.read_excel(RAW_FILE, sheet_name=0)
+    df.to_pickle(RAW_CACHE)
+    return df
+
+
+def _ensure_raw_file(status_callback: StatusCallback | None) -> None:
+    """Downloads the demo dataset's Excel file if it isn't there yet."""
     if RAW_FILE.exists():
-        logger.info("Raw dataset already present at %s", RAW_FILE)
-        return RAW_FILE
+        return
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     logger.info("Downloading dataset from %s", DATASET_URL)
@@ -91,7 +106,6 @@ def ensure_raw_data(status_callback: StatusCallback | None = None) -> Path:
         extracted[0].rename(RAW_FILE)
 
     logger.info("Dataset downloaded to %s", RAW_FILE)
-    return RAW_FILE
 
 
 def _normalize_google_sheet_url(url: str) -> str:
@@ -160,7 +174,3 @@ def _read_spreadsheet(source: Path | io.BytesIO, is_csv: bool, error_message: st
     except Exception as exc:
         raise ValueError(error_message) from exc
 
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    ensure_raw_data()

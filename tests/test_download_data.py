@@ -98,3 +98,21 @@ class TestStreamDownload:
 
         assert content == b"abcdef"
         assert progress == [(3, 6), (6, 6)]
+
+
+class TestLoadDemoDataset:
+    def test_second_read_comes_from_the_cache(self, tmp_path, monkeypatch):
+        import pandas as pd
+
+        from src import download_data
+
+        raw_file = tmp_path / "Online Retail.xlsx"
+        pd.DataFrame({"InvoiceNo": ["536365"], "Quantity": [6]}).to_excel(raw_file, index=False)
+        monkeypatch.setattr(download_data, "RAW_FILE", raw_file)
+        monkeypatch.setattr(download_data, "RAW_CACHE", raw_file.with_suffix(".pkl"))
+
+        first = download_data.load_demo_dataset()
+        monkeypatch.setattr(download_data.pd, "read_excel", lambda *a, **k: pytest.fail("read the Excel file again"))
+        second = download_data.load_demo_dataset()
+
+        assert list(second["InvoiceNo"]) == list(first["InvoiceNo"]) == [536365]

@@ -1,7 +1,7 @@
 import pandas as pd
 
-from src.findings import build_findings
-from src.report import build_report_data
+from src.sales_findings import build_findings
+from src.sales_kpis import build_report_data
 
 
 def _row(order, product, qty, when, price, customer=1, country="United States"):

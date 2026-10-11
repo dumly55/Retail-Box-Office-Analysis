@@ -5,8 +5,8 @@ import pytest
 from openpyxl import load_workbook
 
 from src.clean import QualityLog
-from src.excel_report import TAB_COLORS, build_workbook
-from src.report import build_report_data
+from src.sales_excel import TAB_COLORS, build_workbook
+from src.sales_kpis import build_report_data
 
 EXPECTED_SHEETS = ["Summary", "Top Products", "By Country", "Data Quality Log"]
 
@@ -150,7 +150,7 @@ class TestBuildWorkbook:
         assert ws.freeze_panes == "A4"
 
     def test_organized_data_keeps_the_latest_rows_for_large_data(self, report_data, quality_log, tmp_path, monkeypatch):
-        monkeypatch.setattr("src.excel_report.ORGANIZED_ROW_LIMIT", 2)
+        monkeypatch.setattr("src.sales_excel.ORGANIZED_ROW_LIMIT", 2)
         rows = pd.DataFrame(
             [
                 _sales_row("600001", "A1", "Widget", 10, "2011-11-21 10:00:00", 10.0, 1001, "UK"),
