@@ -1,52 +1,29 @@
-"""KPI computation for the weekly sales report."""
+"""KPIs for the sales analysis: totals over the whole dataset, a month-by-month trend, and breakdowns."""
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
 
 import pandas as pd
 
 
-def week_bounds(as_of_date: date) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """Returns (week_start, week_end) for the Mon-Sun ISO week containing as_of_date.
-
-    week_end is exclusive (the following Monday), so filtering is `>= start, < end`.
-    """
-    monday = as_of_date - timedelta(days=as_of_date.weekday())
-    start = pd.Timestamp(monday)
-    end = start + pd.Timedelta(days=7)
-    return start, end
-
-
-def latest_sales_date(sales_df: pd.DataFrame) -> date:
-    if sales_df.empty:
-        raise ValueError("No valid sales rows found, so there's no week to report on.")
-    return sales_df["InvoiceDate"].max().date()
-
-
-def filter_range(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    return df[(df["InvoiceDate"] >= start) & (df["InvoiceDate"] < end)]
-
-
-def _summarize(sales_week: pd.DataFrame, cancellations_week: pd.DataFrame, count_customers: bool) -> dict:
+def _summarize(sales: pd.DataFrame, cancellations: pd.DataFrame) -> dict:
+    revenue = float(sales["LineTotal"].sum())
+    orders = int(sales["InvoiceNo"].nunique())
+    # A sheet without a customer column has no IDs at all, so customers can't be counted (not zero).
+    count_customers = bool(sales["CustomerID"].notna().any())
     return {
-        "revenue": float(sales_week["LineTotal"].sum()),
-        "units": int(sales_week["Quantity"].sum()),
-        "orders": int(sales_week["InvoiceNo"].nunique()),
-        "customers": int(sales_week["CustomerID"].nunique()) if count_customers else None,
-        "cancellations_count": int(cancellations_week["InvoiceNo"].nunique()),
-        "cancellations_value": float(-cancellations_week["LineTotal"].sum()),
+        "revenue": revenue,
+        "units": int(sales["Quantity"].sum()),
+        "orders": orders,
+        "avg_order_value": revenue / orders if orders else 0.0,
+        "customers": int(sales["CustomerID"].nunique()) if count_customers else None,
+        "cancellations_count": int(cancellations["InvoiceNo"].nunique()),
+        "cancellations_value": float(-cancellations["LineTotal"].sum()),
     }
 
 
-def pct_change(current: float | None, previous: float | None) -> float | None:
-    if not previous:  # 0, or None when the metric can't be counted
-        return None
-    return (current - previous) / previous * 100
-
-
-def top_products(sales_week: pd.DataFrame, n: int = 10) -> pd.DataFrame:
+def top_products(sales: pd.DataFrame, n: int = 10) -> pd.DataFrame:
     return (
-        sales_week.groupby(["StockCode", "Description"], dropna=False)
+        sales.groupby(["StockCode", "Description"], dropna=False)
         .agg(Revenue=("LineTotal", "sum"), UnitsSold=("Quantity", "sum"))
         .reset_index()
         .sort_values("Revenue", ascending=False)
@@ -55,9 +32,9 @@ def top_products(sales_week: pd.DataFrame, n: int = 10) -> pd.DataFrame:
     )
 
 
-def revenue_by_country(sales_week: pd.DataFrame) -> pd.DataFrame:
+def revenue_by_country(sales: pd.DataFrame) -> pd.DataFrame:
     return (
-        sales_week.groupby("Country")
+        sales.groupby("Country")
         .agg(Revenue=("LineTotal", "sum"), Orders=("InvoiceNo", "nunique"))
         .reset_index()
         .sort_values("Revenue", ascending=False)
@@ -65,87 +42,57 @@ def revenue_by_country(sales_week: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def daily_revenue(sales_week: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    daily = sales_week.groupby(sales_week["InvoiceDate"].dt.date)["LineTotal"].sum()
-    full_range = pd.date_range(start, end - pd.Timedelta(days=1), freq="D").date
-    daily = daily.reindex(full_range, fill_value=0.0)
-    return pd.DataFrame({"Date": daily.index, "Revenue": daily.values})
+def monthly_revenue(sales: pd.DataFrame) -> pd.DataFrame:
+    """Revenue and orders per calendar month (Month = the 1st of the month), including months with no sales."""
+    months = sales["InvoiceDate"].dt.to_period("M")
+    monthly = sales.groupby(months).agg(Revenue=("LineTotal", "sum"), Orders=("InvoiceNo", "nunique"))
+    every_month = pd.period_range(months.min(), months.max(), freq="M")
+    monthly = monthly.reindex(every_month, fill_value=0)
+    return pd.DataFrame(
+        {"Month": every_month.to_timestamp(), "Revenue": monthly["Revenue"].to_numpy(), "Orders": monthly["Orders"].to_numpy()}
+    )
 
 
 @dataclass
-class WeeklyReportData:
-    week_start: pd.Timestamp
-    week_end: pd.Timestamp
-    current: dict
-    previous: dict
-    wow: dict
+class SalesReportData:
+    start: pd.Timestamp  # first sale in the data
+    end: pd.Timestamp  # last sale in the data
+    totals: dict
+    monthly: pd.DataFrame
     top_products: pd.DataFrame
     by_country: pd.DataFrame
-    daily: pd.DataFrame
     currency: str = ""
     findings: list[str] = field(default_factory=list)
 
     @property
-    def week_label(self) -> str:
-        return f"{self.week_start.date()} to {(self.week_end - pd.Timedelta(days=1)).date()}"
+    def period_label(self) -> str:
+        return f"{self.start:%Y-%m-%d} to {self.end:%Y-%m-%d}"
 
-    def summary_rows(self) -> list[tuple[str, str, str, float | None]]:
-        """Display-formatted (metric, this week, last week, raw WoW %) rows shared by the CLI and GUI."""
-        c, p, cur = self.current, self.previous, self.currency
+    def summary_rows(self) -> list[tuple[str, str]]:
+        """Display-formatted (metric, value) rows shared by the CLI and GUI."""
+        t, cur = self.totals, self.currency
 
         def count(value: int | None) -> str:
             return "n/a" if value is None else f"{value:,}"
 
         return [
-            ("Revenue", f"{cur}{c['revenue']:,.2f}", f"{cur}{p['revenue']:,.2f}", self.wow["revenue"]),
-            ("Units Sold", count(c["units"]), count(p["units"]), self.wow["units"]),
-            ("Orders", count(c["orders"]), count(p["orders"]), self.wow["orders"]),
-            ("Unique Customers", count(c["customers"]), count(p["customers"]), self.wow["customers"]),
+            ("Revenue", f"{cur}{t['revenue']:,.2f}"),
+            ("Orders", count(t["orders"])),
+            ("Average Order Value", f"{cur}{t['avg_order_value']:,.2f}"),
+            ("Units Sold", count(t["units"])),
+            ("Unique Customers", count(t["customers"])),
         ]
 
-    def summary_markdown(self) -> str:
-        lines = [
-            f"## Weekly Sales Report: {self.week_label}",
-            "",
-            "| Metric | This Week | Last Week | WoW % Change |",
-            "|---|--:|--:|--:|",
-        ]
-        for metric, this_week, last_week, wow in self.summary_rows():
-            lines.append(f"| {metric} | {this_week} | {last_week} | {format_wow(wow)} |")
-        if self.findings:
-            lines += ["", "### Key findings", ""] + [f"- {finding}" for finding in self.findings]
-        return "\n".join(lines) + "\n"
 
-
-def format_wow(value: float | None) -> str:
-    return "n/a" if value is None else f"{value:+.1f}%"
-
-
-def build_report_data(
-    sales_df: pd.DataFrame, cancellations_df: pd.DataFrame, as_of_date: date, currency: str = ""
-) -> WeeklyReportData:
-    start, end = week_bounds(as_of_date)
-    prev_start, prev_end = start - pd.Timedelta(days=7), start
-
-    sales_week = filter_range(sales_df, start, end)
-    cancels_week = filter_range(cancellations_df, start, end)
-    sales_prev = filter_range(sales_df, prev_start, prev_end)
-    cancels_prev = filter_range(cancellations_df, prev_start, prev_end)
-
-    # A sheet without a customer column has no IDs at all, so customers can't be counted (not zero).
-    count_customers = bool(sales_df["CustomerID"].notna().any())
-    current = _summarize(sales_week, cancels_week, count_customers)
-    previous = _summarize(sales_prev, cancels_prev, count_customers)
-    wow = {key: pct_change(current[key], previous[key]) for key in ("revenue", "units", "orders", "customers")}
-
-    return WeeklyReportData(
-        week_start=start,
-        week_end=end,
-        current=current,
-        previous=previous,
-        wow=wow,
-        top_products=top_products(sales_week),
-        by_country=revenue_by_country(sales_week),
-        daily=daily_revenue(sales_week, start, end),
+def build_report_data(sales_df: pd.DataFrame, cancellations_df: pd.DataFrame, currency: str = "") -> SalesReportData:
+    if sales_df.empty:
+        raise ValueError("No valid sales rows found, so there's nothing to analyze.")
+    return SalesReportData(
+        start=sales_df["InvoiceDate"].min(),
+        end=sales_df["InvoiceDate"].max(),
+        totals=_summarize(sales_df, cancellations_df),
+        monthly=monthly_revenue(sales_df),
+        top_products=top_products(sales_df),
+        by_country=revenue_by_country(sales_df),
         currency=currency,
     )

@@ -1,4 +1,4 @@
-"""Builds the formatted weekly sales Excel report from computed KPI data."""
+"""Builds the formatted sales analysis Excel workbook from the computed KPIs."""
 
 from pathlib import Path
 
@@ -11,16 +11,14 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from .clean import QualityLog
 from .excel_style import (
-    BAD_FONT,
     BOLD,
-    GOOD_FONT,
     add_table_polish,
     write_dataframe,
     write_findings,
     write_header_row,
     write_title,
 )
-from .report import WeeklyReportData
+from .report import SalesReportData
 
 COUNT_FORMAT = "#,##0"
 
@@ -45,64 +43,52 @@ def _autofit_first_column(ws: Worksheet, width: int = 22) -> None:
     ws.column_dimensions["A"].width = width
 
 
-def _build_summary_sheet(ws: Worksheet, data: WeeklyReportData) -> None:
-    write_title(ws, f"Weekly Sales Report: {data.week_label}", span_cols=4)
-    _autofit_first_column(ws)
+def _build_summary_sheet(ws: Worksheet, data: SalesReportData) -> None:
+    write_title(ws, f"Sales Analysis: {data.period_label}", span_cols=4)
+    _autofit_first_column(ws, 26)
     currency_format = _currency_format(data.currency)
+    t = data.totals
     cancellations_value_label = f"Cancellations (value, {data.currency})" if data.currency else "Cancellations (value)"
 
-    # (label, this week, last week, wow % change, format kind)
+    # (label, value, format kind)
     kpi_rows = [
-        (_revenue_label(data.currency), data.current["revenue"], data.previous["revenue"], data.wow["revenue"], "currency"),
-        ("Units Sold", data.current["units"], data.previous["units"], data.wow["units"], "count"),
-        ("Orders", data.current["orders"], data.previous["orders"], data.wow["orders"], "count"),
-        ("Unique Customers", data.current["customers"], data.previous["customers"], data.wow["customers"], "count"),
-        ("Cancellations (count)", data.current["cancellations_count"], data.previous["cancellations_count"], None, "count"),
-        (cancellations_value_label, data.current["cancellations_value"], data.previous["cancellations_value"], None, "currency"),
+        (_revenue_label(data.currency), t["revenue"], "currency"),
+        ("Orders", t["orders"], "count"),
+        ("Average Order Value", t["avg_order_value"], "currency"),
+        ("Units Sold", t["units"], "count"),
+        ("Unique Customers", t["customers"], "count"),
+        ("Cancelled Orders", t["cancellations_count"], "count"),
+        (cancellations_value_label, t["cancellations_value"], "currency"),
     ]
-    kpi_df = pd.DataFrame([row[:4] for row in kpi_rows], columns=["Metric", "This Week", "Last Week", "WoW % Change"])
+    kpi_df = pd.DataFrame([row[:2] for row in kpi_rows], columns=["Metric", "Value"])
 
     header_row = 3
     last_row = write_dataframe(ws, kpi_df, header_row)
-
-    # WoW values come from `kpi_rows` directly (not re-read from the cell) because pandas
-    # coerces a mixed [float, None] column to float64 with NaN in place of None, and NaN
-    # is an instance of float — reading it back would misidentify "n/a" rows as numeric.
-    for offset, (_, this_week, last_week, wow_value, kind) in enumerate(kpi_rows):
-        r = header_row + 1 + offset
-        value_format = currency_format if kind == "currency" else COUNT_FORMAT
-        for col, value in ((2, this_week), (3, last_week)):
-            cell = ws.cell(row=r, column=col)
-            if value is None:  # e.g. customers, when the sheet has no customer column
-                cell.value = "n/a"
-                cell.alignment = Alignment(horizontal="center")
-            else:
-                cell.number_format = value_format
-
-        wow_cell = ws.cell(row=r, column=4)
-        if wow_value is None:
-            wow_cell.value = "n/a"
-            wow_cell.alignment = Alignment(horizontal="center")
+    for offset, (_, value, kind) in enumerate(kpi_rows):
+        cell = ws.cell(row=header_row + 1 + offset, column=2)
+        if value is None:  # e.g. customers, when the sheet has no customer column
+            cell.value = "n/a"
+            cell.alignment = Alignment(horizontal="center")
         else:
-            wow_cell.value = wow_value / 100
-            wow_cell.number_format = "+0.0%;-0.0%"
-            wow_cell.font = GOOD_FONT if wow_value >= 0 else BAD_FONT
-
-    ws.freeze_panes = f"B{header_row + 1}"
+            cell.number_format = currency_format if kind == "currency" else COUNT_FORMAT
+    ws.column_dimensions["B"].width = 18
+    ws.freeze_panes = f"A{header_row + 1}"
 
     last_row = write_findings(ws, data.findings, start_row=last_row + 2)
 
-    # Daily revenue trend data (written off to the side, feeds the chart)
-    chart_start_row = last_row + 3
-    ws.cell(row=chart_start_row, column=1, value="Daily Revenue Trend").font = BOLD
-    daily_last_row = write_dataframe(ws, data.daily, chart_start_row + 1, number_formats={1: currency_format})
+    # Month-by-month table (feeds the chart beside the KPI table)
+    table_row = last_row + 3
+    ws.cell(row=table_row, column=1, value="Monthly Revenue").font = BOLD
+    monthly_last_row = write_dataframe(
+        ws, data.monthly, table_row + 1, number_formats={0: "mmm yyyy", 1: currency_format, 2: COUNT_FORMAT}
+    )
 
     chart = LineChart()
-    chart.title = "Daily Revenue Trend"
+    chart.title = "Monthly Revenue"
     chart.y_axis.title = _revenue_label(data.currency)
-    chart.x_axis.title = "Date"
-    values = Reference(ws, min_col=2, min_row=chart_start_row + 1, max_row=daily_last_row)
-    categories = Reference(ws, min_col=1, min_row=chart_start_row + 2, max_row=daily_last_row)
+    chart.x_axis.number_format = "mmm yyyy"
+    values = Reference(ws, min_col=2, min_row=table_row + 1, max_row=monthly_last_row)
+    categories = Reference(ws, min_col=1, min_row=table_row + 2, max_row=monthly_last_row)
     chart.add_data(values, titles_from_data=True)
     chart.set_categories(categories)
     chart.width = 20
@@ -110,7 +96,7 @@ def _build_summary_sheet(ws: Worksheet, data: WeeklyReportData) -> None:
     ws.add_chart(chart, f"F{header_row}")
 
 
-def _build_top_products_sheet(ws: Worksheet, data: WeeklyReportData) -> None:
+def _build_top_products_sheet(ws: Worksheet, data: SalesReportData) -> None:
     write_title(ws, "Top 10 Products by Revenue", span_cols=3)
     header_row = 3
     last_row = write_dataframe(
@@ -130,7 +116,7 @@ def _build_top_products_sheet(ws: Worksheet, data: WeeklyReportData) -> None:
     ws.add_chart(chart, "F3")
 
 
-def _build_by_country_sheet(ws: Worksheet, data: WeeklyReportData) -> None:
+def _build_by_country_sheet(ws: Worksheet, data: SalesReportData) -> None:
     write_title(ws, "Revenue by Country", span_cols=3)
     header_row = 3
     last_row = write_dataframe(
@@ -183,22 +169,19 @@ ORGANIZED_COLUMNS = {
     "CustomerID": ("Customer", 14),
     "Country": ("Country", 18),
 }
-# Above this many rows, only the two compared weeks are written, to keep the file a sensible size.
+# Above this many rows, only the most recent ones are written, to keep the file a sensible size.
 ORGANIZED_ROW_LIMIT = 100_000
 
 
-def _build_organized_sheet(ws: Worksheet, sales_df: pd.DataFrame, data: WeeklyReportData) -> None:
-    if len(sales_df) > ORGANIZED_ROW_LIMIT:
-        in_compared_weeks = (sales_df["InvoiceDate"] >= data.week_start - pd.Timedelta(days=7)) & (
-            sales_df["InvoiceDate"] < data.week_end
-        )
-        rows = sales_df[in_compared_weeks]
-        title = f"Organized Data: the two weeks compared ({len(rows):,} of {len(sales_df):,} clean rows)"
+def _build_organized_sheet(ws: Worksheet, sales_df: pd.DataFrame, data: SalesReportData) -> None:
+    rows = sales_df.sort_values(["InvoiceDate", "InvoiceNo"])
+    if len(rows) > ORGANIZED_ROW_LIMIT:
+        rows = rows.tail(ORGANIZED_ROW_LIMIT)
+        title = f"Organized Data: the latest {len(rows):,} of {len(sales_df):,} clean sales rows"
     else:
-        rows = sales_df
         title = f"Organized Data: all {len(rows):,} clean sales rows"
 
-    rows = rows.sort_values(["InvoiceDate", "InvoiceNo"])[list(ORGANIZED_COLUMNS)]
+    rows = rows[list(ORGANIZED_COLUMNS)]
     rows = rows.astype(object).where(rows.notna(), None)
 
     write_title(ws, title, span_cols=len(ORGANIZED_COLUMNS))
@@ -220,7 +203,7 @@ def _build_organized_sheet(ws: Worksheet, sales_df: pd.DataFrame, data: WeeklyRe
 
 
 def build_workbook(
-    data: WeeklyReportData, quality_log: QualityLog, out_path: Path, organized_rows: pd.DataFrame | None = None
+    data: SalesReportData, quality_log: QualityLog, out_path: Path, organized_rows: pd.DataFrame | None = None
 ) -> None:
     """`organized_rows` (the cleaned sales rows), if given, adds an "Organized Data" sheet."""
     wb = Workbook()

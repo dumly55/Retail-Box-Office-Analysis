@@ -1,5 +1,4 @@
 import dataclasses
-from datetime import date
 
 import pandas as pd
 import pytest
@@ -42,7 +41,7 @@ def quality_log():
 
 @pytest.fixture
 def report_data():
-    """A normal week with both current and prior week sales, so WoW % is numeric."""
+    """A few sales across two weeks of November, plus one cancellation."""
     sales_df = pd.DataFrame(
         [
             _sales_row("600001", "A1", "Widget", 10, "2011-11-21 10:00:00", 10.0, 1001, "United Kingdom"),
@@ -53,22 +52,17 @@ def report_data():
     cancellations_df = pd.DataFrame(
         [_sales_row("C600004", "A1", "Widget", -2, "2011-11-22 08:00:00", 10.0, 1001, "United Kingdom")]
     )
-    return build_report_data(sales_df, cancellations_df, date(2011, 11, 24))
+    return build_report_data(sales_df, cancellations_df)
 
 
 @pytest.fixture
-def report_data_no_previous_week():
-    """A week with no prior-week sales at all, so every WoW % is None ('n/a').
-
-    This is the scenario that previously triggered a bug: pandas coerces a
-    mixed [float, None] KPI column to float64 with NaN standing in for None,
-    and NaN passes an `isinstance(x, float)` check meant to detect real numbers.
-    """
+def report_data_single_row():
+    """The smallest possible dataset: one sale and no cancellations."""
     sales_df = pd.DataFrame(
         [_sales_row("600001", "A1", "Widget", 10, "2011-11-21 10:00:00", 10.0, 1001, "United Kingdom")]
     )
     cancellations_df = pd.DataFrame(columns=list(sales_df.columns))
-    return build_report_data(sales_df, cancellations_df, date(2011, 11, 24))
+    return build_report_data(sales_df, cancellations_df)
 
 
 class TestBuildWorkbook:
@@ -105,13 +99,13 @@ class TestBuildWorkbook:
                 _sales_row("500001", "A1", "Widget", 10, "2011-11-14 10:00:00", 10.0, None, "United Kingdom"),
             ]
         )
-        data = build_report_data(sales_df, sales_df.iloc[0:0], date(2011, 11, 24))
+        data = build_report_data(sales_df, sales_df.iloc[0:0])
         out_path = tmp_path / "report.xlsx"
         build_workbook(data, quality_log, out_path)
 
         ws = load_workbook(out_path)["Summary"]
-        assert ws["A7"].value == "Unique Customers"
-        assert (ws["B7"].value, ws["C7"].value, ws["D7"].value) == ("n/a", "n/a", "n/a")
+        assert ws["A8"].value == "Unique Customers"
+        assert ws["B8"].value == "n/a"
 
     def test_uses_the_report_currency_in_labels_and_formats(self, report_data, quality_log, tmp_path):
         out_path = tmp_path / "report.xlsx"
@@ -122,16 +116,18 @@ class TestBuildWorkbook:
         assert ws["B4"].number_format == '"$"#,##0.00'
 
     def test_summary_shows_key_findings_under_the_kpi_table(self, report_data, quality_log, tmp_path):
-        report_data.findings = ["Revenue rose 80.0% week over week.", "The strongest day was Monday."]
+        report_data.findings = ["The best month was November 2011.", "Monday was the busiest day of the week."]
         out_path = tmp_path / "report.xlsx"
         build_workbook(report_data, quality_log, out_path)
 
         ws = load_workbook(out_path)["Summary"]
-        assert ws["A11"].value == "Key findings"
-        assert ws["A12"].value == "• Revenue rose 80.0% week over week."
-        assert ws["A13"].value == "• The strongest day was Monday."
-        assert "A12:D12" in {str(r) for r in ws.merged_cells.ranges}
-        assert ws["A16"].value == "Daily Revenue Trend"
+        assert (ws["A4"].value, ws["A5"].value) == ("Revenue", "Orders")
+        assert ws["A12"].value == "Key findings"
+        assert ws["A13"].value == "• The best month was November 2011."
+        assert ws["A14"].value == "• Monday was the busiest day of the week."
+        assert "A13:D13" in {str(r) for r in ws.merged_cells.ranges}
+        assert ws["A17"].value == "Monthly Revenue"
+        assert ws["A19"].number_format == "mmm yyyy"
 
     def test_organized_data_sheet_lists_clean_rows_sorted_by_date(self, report_data, quality_log, tmp_path):
         rows = pd.DataFrame(
@@ -153,8 +149,8 @@ class TestBuildWorkbook:
         assert ws["H5"].value is None
         assert ws.freeze_panes == "A4"
 
-    def test_organized_data_keeps_only_compared_weeks_for_large_data(self, report_data, quality_log, tmp_path, monkeypatch):
-        monkeypatch.setattr("src.excel_report.ORGANIZED_ROW_LIMIT", 1)
+    def test_organized_data_keeps_the_latest_rows_for_large_data(self, report_data, quality_log, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.excel_report.ORGANIZED_ROW_LIMIT", 2)
         rows = pd.DataFrame(
             [
                 _sales_row("600001", "A1", "Widget", 10, "2011-11-21 10:00:00", 10.0, 1001, "UK"),
@@ -167,31 +163,16 @@ class TestBuildWorkbook:
 
         ws = load_workbook(out_path)["Organized Data"]
         assert [ws["B4"].value, ws["B5"].value, ws["B6"].value] == ["500001", "600001", None]
-        assert "2 of 3" in ws["A1"].value
+        assert "the latest 2 of 3" in ws["A1"].value
 
     def test_creates_output_directory_if_missing(self, report_data, quality_log, tmp_path):
         out_path = tmp_path / "nested" / "dir" / "report.xlsx"
         build_workbook(report_data, quality_log, out_path)
         assert out_path.exists()
 
-    def test_no_previous_week_data_does_not_crash_and_shows_na(
-        self, report_data_no_previous_week, quality_log, tmp_path
-    ):
+    def test_single_row_data_still_builds_every_sheet(self, report_data_single_row, quality_log, tmp_path):
         out_path = tmp_path / "report.xlsx"
-        build_workbook(report_data_no_previous_week, quality_log, out_path)
-
-        wb = load_workbook(out_path)
-        ws = wb["Summary"]
-        # Revenue row (row 4) WoW cell should read "n/a", not a stray numeric/NaN artifact.
-        wow_cell = ws.cell(row=4, column=4)
-        assert wow_cell.value == "n/a"
-
-    def test_empty_top_products_and_by_country_do_not_crash(
-        self, report_data_no_previous_week, quality_log, tmp_path
-    ):
-        # Sanity check that a minimal single-row week still produces valid breakdown sheets.
-        out_path = tmp_path / "report.xlsx"
-        build_workbook(report_data_no_previous_week, quality_log, out_path)
+        build_workbook(report_data_single_row, quality_log, out_path)
         wb = load_workbook(out_path)
         assert wb["Top Products"]["A3"].value == "StockCode"
         assert wb["By Country"]["A3"].value == "Country"

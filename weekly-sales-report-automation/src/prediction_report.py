@@ -222,7 +222,7 @@ def main() -> None:
     args = parser.parse_args()
 
     as_of = date.today()
-    setup_logging(as_of, "predictions")
+    setup_logging(f"predictions_{as_of}")
     try:
         output = run(args.predictions, args.actuals, as_of, args.title_map, save_history=args.save_history)
         if args.markdown_summary:

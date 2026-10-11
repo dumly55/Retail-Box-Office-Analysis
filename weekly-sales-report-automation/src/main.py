@@ -1,13 +1,12 @@
-"""CLI entrypoint: generates the automated weekly sales report.
+"""CLI entrypoint: cleans a sales dataset and builds the sales analysis workbook.
 
 Usage:
-    python -m src.main --as-of-date 2011-11-28
+    python -m src.main
 """
 
 import argparse
 import logging
 import sys
-from datetime import date, datetime
 from pathlib import Path
 
 import requests
@@ -25,7 +24,7 @@ from .download_data import (
 from .excel_report import build_workbook
 from .findings import build_findings
 from .normalize import detect_currency, parse_column_map, standardize
-from .report import WeeklyReportData, build_report_data, format_wow, latest_sales_date
+from .report import SalesReportData, build_report_data
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
@@ -36,13 +35,6 @@ DEFAULT_CURRENCY = "$"
 console = Console()
 
 
-def _parse_date(value: str) -> date:
-    try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"'{value}' is not a valid date - use YYYY-MM-DD (e.g. 2011-11-28)") from exc
-
-
 def _parse_column_map(value: str) -> dict[str, str]:
     try:
         return parse_column_map(value)
@@ -51,13 +43,7 @@ def _parse_column_map(value: str) -> dict[str, str]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate the automated weekly sales report.")
-    parser.add_argument(
-        "--as-of-date",
-        default=None,
-        type=_parse_date,
-        help="Date (YYYY-MM-DD) whose ISO week (Mon-Sun) should be reported on. Defaults to the latest week in the data.",
-    )
+    parser = argparse.ArgumentParser(description="Clean a sales dataset and build the sales analysis workbook.")
     parser.add_argument(
         "--data-url",
         default=None,
@@ -76,7 +62,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         type=_parse_column_map,
         help=(
-            'Optional: tell the report which of your sheet\'s columns to use, e.g. "date=Order Placed, line_total=Net Sales". '
+            'Optional: tell the analysis which of your sheet\'s columns to use, e.g. "date=Order Placed, line_total=Net Sales". '
             "Only needed when automatic column recognition misses or picks the wrong column."
         ),
     )
@@ -88,25 +74,19 @@ def parse_args() -> argparse.Namespace:
             'data\'s amounts (like "€1,200.00"), or "$" if there isn\'t one. The demo dataset is in £.'
         ),
     )
-    parser.add_argument(
-        "--markdown-summary",
-        default=None,
-        help="Optional: append the KPI summary as a Markdown table to this file (e.g. $GITHUB_STEP_SUMMARY in CI).",
-    )
     return parser.parse_args()
 
 
-def setup_logging(as_of_date: date | None, prefix: str = "run") -> None:
-    """Logs the full run detail to a file. Console output is handled separately via
+def setup_logging(log_name: str) -> None:
+    """Logs the full run detail to logs/<log_name>.log. Console output is handled separately via
     rich (progress bar, summary table, friendly errors), so no console handler here.
 
     Reconfigures the root logger's handlers on every call (rather than relying on
     `logging.basicConfig`'s "first call wins" behavior), so a long-lived process
-    that runs the pipeline more than once -- the GUI -- gets a fresh log file
-    per run instead of writing everything to whichever date was requested first.
+    that runs more than once -- the GUI -- gets a fresh log file per run.
     """
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOGS_DIR / f"{prefix}_{as_of_date or 'latest'}.log"
+    log_file = LOGS_DIR / f"{log_name}.log"
 
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
@@ -145,20 +125,18 @@ def next_free_path(path: Path) -> Path:
 
 
 def run_pipeline(
-    as_of_date: date | None,
     data_url: str | None = None,
     data_file: str | Path | None = None,
     column_map: dict[str, str] | None = None,
     currency: str | None = None,
     status_callback: StatusCallback | None = None,
-) -> tuple[WeeklyReportData, QualityLog, Path]:
+) -> tuple[SalesReportData, QualityLog, Path]:
     """Runs the full pipeline (fetch -> clean -> compute KPIs -> build workbook)
     and returns the results. Shared by the CLI and the GUI -- neither one owns
     this logic, they just present it differently.
 
     `data_file` (a local path) takes priority over `data_url` (a link), which
-    takes priority over the built-in demo dataset. If `as_of_date` is None, the
-    latest week that has sales in the data is reported. `currency` overrides the
+    takes priority over the built-in demo dataset. `currency` overrides the
     symbol otherwise detected from the data. `status_callback`, if given,
     receives a short human-readable string at each stage instead of the CLI's
     console/log output.
@@ -188,36 +166,25 @@ def run_pipeline(
     notify("Cleaning and validating data...")
     sales_df, cancellations_df, quality_log = clean_transactions(raw_df)
 
-    if as_of_date is None:
-        as_of_date = latest_sales_date(sales_df)
-        logger.info("No date given; using the latest week in the data (%s)", as_of_date)
-
     notify("Computing KPIs...")
-    report_data = build_report_data(sales_df, cancellations_df, as_of_date, currency)
+    report_data = build_report_data(sales_df, cancellations_df, currency)
     report_data.findings = build_findings(sales_df, report_data)
 
-    notify("Building the Excel report...")
-    out_path = next_free_path(OUTPUT_DIR / f"weekly_report_{as_of_date}.xlsx")
+    notify("Building the Excel workbook...")
+    out_path = next_free_path(OUTPUT_DIR / "sales_analysis.xlsx")
     build_workbook(report_data, quality_log, out_path, organized_rows=sales_df)
-    logger.info("Report written to %s", out_path)
+    logger.info("Workbook written to %s", out_path)
 
     notify("Done.")
     return report_data, quality_log, out_path
 
 
-def _print_summary(report_data: WeeklyReportData, out_path: Path) -> None:
-    table = Table(title=f"Weekly Sales Report - {report_data.week_label}", title_style="bold cyan")
+def _print_summary(report_data: SalesReportData, out_path: Path) -> None:
+    table = Table(title=f"Sales Analysis - {report_data.period_label}", title_style="bold cyan")
     table.add_column("Metric", style="bold")
-    table.add_column("This Week", justify="right")
-    table.add_column("Last Week", justify="right")
-    table.add_column("WoW % Change", justify="right")
-
-    for metric, current, previous, wow in report_data.summary_rows():
-        wow_text = format_wow(wow)
-        if wow is not None:
-            color = "green" if wow >= 0 else "red"
-            wow_text = f"[{color}]{wow_text}[/{color}]"
-        table.add_row(metric, current, previous, wow_text)
+    table.add_column("Value", justify="right")
+    for metric, value in report_data.summary_rows():
+        table.add_row(metric, value)
 
     console.print()
     console.print(table)
@@ -226,36 +193,24 @@ def _print_summary(report_data: WeeklyReportData, out_path: Path) -> None:
         for finding in report_data.findings:
             console.print(f"  • {escape(finding)}")
         console.print()
-    console.print(f"[bold green]Report written[/bold green] to [bold]{out_path}[/bold]\n")
+    console.print(f"[bold green]Workbook written[/bold green] to [bold]{out_path}[/bold]\n")
 
 
 def main() -> None:
     args = parse_args()
-    setup_logging(args.as_of_date)
+    setup_logging("sales_analysis")
     logger = logging.getLogger("main")
-    logger.info("Starting weekly report run for as-of date %s", args.as_of_date or "latest week in the data")
+    logger.info("Starting sales analysis run")
 
     try:
-        report_data, quality_log, out_path = run_pipeline(
-            args.as_of_date,
+        report_data, _quality_log, out_path = run_pipeline(
             data_url=args.data_url,
             data_file=args.data_file,
             column_map=args.column_map,
             currency=args.currency,
         )
-
-        if report_data.current["orders"] == 0:
-            console.print(
-                f"[yellow]Warning:[/yellow] no transactions found for the week of {report_data.week_label}. "
-                "The report will still be generated, but it will be empty."
-            )
-
-        if args.markdown_summary:
-            with open(args.markdown_summary, "a", encoding="utf-8") as summary_file:
-                summary_file.write(report_data.summary_markdown())
-
     except Exception as exc:
-        logger.exception("Report generation failed")
+        logger.exception("Sales analysis failed")
         console.print(f"[bold red]Error:[/bold red] {describe_error(exc)}")
         sys.exit(1)
 

@@ -16,15 +16,12 @@ from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from tkcalendar import DateEntry
-
 from .download_data import StatusCallback
 from .main import describe_error, run_pipeline, setup_logging
 from .prediction_findings import scorecard
 from .prediction_report import PredictionRun
 from .prediction_report import run as run_predictions
 from .predictions import IN_THEATERS, parse_title_map
-from .report import format_wow
 
 WINDOW_TITLE = "Report Generator"
 SPREADSHEET_TYPES = [("Spreadsheets", "*.csv *.xlsx *.xls"), ("All files", "*.*")]
@@ -128,8 +125,10 @@ def _hint(parent: ttk.Frame, text: str) -> None:
 class SalesTab(ReportTab):
     def __init__(self, root: tk.Tk, notebook: ttk.Notebook) -> None:
         super().__init__(
-            root, notebook, "Sales Report", "Weekly Sales Report",
-            "Generates a formatted Excel sales report for one week. No terminal needed.", "Generate Report",
+            root, notebook, "Sales Analysis", "Sales Analysis",
+            "Cleans a sales file and builds an Excel analysis: totals, monthly trend, top products and countries. "
+            "No terminal needed.",
+            "Run Analysis",
         )
 
     def _build_inputs(self) -> None:
@@ -139,35 +138,15 @@ class SalesTab(ReportTab):
         self._source_row(source_frame, self.link_var)
         _hint(source_frame, SOURCE_HINT + " Leave blank to use the built-in demo dataset.")
 
-        week_frame = ttk.LabelFrame(self.tab, text="Report week")
-        week_frame.pack(fill="x", **PAD)
-        self.use_latest_var = tk.BooleanVar(value=True)
-        ttk.Radiobutton(
-            week_frame, text="Latest week in the data", variable=self.use_latest_var, value=True, command=self._sync_date_picker
-        ).pack(anchor="w", padx=10, pady=(8, 2))
-        date_row = ttk.Frame(week_frame)
-        date_row.pack(fill="x", padx=10, pady=(0, 8))
-        ttk.Radiobutton(
-            date_row, text="Week containing:", variable=self.use_latest_var, value=False, command=self._sync_date_picker
-        ).pack(side="left")
-        self.date_picker = DateEntry(date_row, date_pattern="yyyy-mm-dd", width=12, firstweekday="monday")
-        self.date_picker.pack(side="left", padx=8)
-        self._sync_date_picker()
-
-    def _sync_date_picker(self) -> None:
-        self.date_picker.configure(state="disabled" if self.use_latest_var.get() else "normal")
-
     def _on_run(self) -> None:
-        # get_date() never raises: tkcalendar reverts unparseable text to the last valid date.
-        as_of_date = None if self.use_latest_var.get() else self.date_picker.get_date()
         source = self.link_var.get().strip()
         data_url = source if source.lower().startswith(("http://", "https://")) else None
         data_file = source if source and data_url is None else None
 
         def work(status_callback: StatusCallback):
-            setup_logging(as_of_date)
+            setup_logging("sales_analysis")
             report_data, _quality_log, out_path = run_pipeline(
-                as_of_date, data_url=data_url, data_file=data_file, status_callback=status_callback
+                data_url=data_url, data_file=data_file, status_callback=status_callback
             )
             return report_data, out_path
 
@@ -175,27 +154,15 @@ class SalesTab(ReportTab):
 
     def _on_success(self, outcome) -> None:
         report_data, out_path = outcome
-        if report_data.current["orders"] == 0:
-            self.status_var.set(f"Done -- but no transactions were found for {report_data.week_label}.")
-        else:
-            self.status_var.set(f"Done. Report covers {report_data.week_label}.")
+        self.status_var.set(f"Done. The analysis covers {report_data.period_label}.")
 
-        # Start the calendar near the data's dates instead of today. tkcalendar ignores set_date while disabled.
-        self.date_picker.configure(state="normal")
-        self.date_picker.set_date(report_data.week_start.date())
-        self._sync_date_picker()
-
-        columns = ("metric", "this_week", "last_week", "wow")
-        tree = ttk.Treeview(self.results_frame, columns=columns, show="headings", height=4)
-        headings = {"metric": "Metric", "this_week": "This Week", "last_week": "Last Week", "wow": "WoW % Change"}
-        for col, text in headings.items():
-            tree.heading(col, text=text)
-            tree.column(col, anchor="e" if col != "metric" else "w", width=130)
-        tree.tag_configure("good", foreground="#1f7a1f")
-        tree.tag_configure("bad", foreground="#c00000")
-        for metric, this_week, last_week, wow in report_data.summary_rows():
-            tag = "" if wow is None else ("good" if wow >= 0 else "bad")
-            tree.insert("", "end", values=(metric, this_week, last_week, format_wow(wow)), tags=(tag,))
+        tree = ttk.Treeview(self.results_frame, columns=("metric", "value"), show="headings", height=5)
+        tree.heading("metric", text="Metric")
+        tree.heading("value", text="Value")
+        tree.column("metric", anchor="w", width=200)
+        tree.column("value", anchor="e", width=160)
+        for row in report_data.summary_rows():
+            tree.insert("", "end", values=row)
         tree.pack(fill="x", pady=(0, 12))
 
         _add_open_buttons(self.results_frame, out_path)
@@ -244,7 +211,7 @@ class PredictionTab(ReportTab):
 
         def work(_status_callback: StatusCallback) -> PredictionRun:
             today = date.today()
-            setup_logging(today, "predictions")
+            setup_logging(f"predictions_{today}")
             return run_predictions(predictions, actuals, today, title_map)
 
         self._start(work, "Reading both sheets and scoring the predictions...")
